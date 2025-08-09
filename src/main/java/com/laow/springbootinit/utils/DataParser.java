@@ -2,7 +2,7 @@ package com.laow.springbootinit.utils;
 
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.laow.springbootinit.common.ErrorCode;
+import com.laow.springbootinit.constant.TextConstant;
 import com.laow.springbootinit.exception.BusinessException;
 
 import java.util.regex.Matcher;
@@ -51,14 +51,16 @@ public class DataParser {
 
         // 查找第一个分隔符
         if (!matcher.find()) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "未找到有效的分隔符");
+            return new String[]{TextConstant.DELIMITER_NOT_FOUND};
+//            throw new BusinessException(ErrorCode.SYSTEM_ERROR, TextConstant.DELIMITER_NOT_FOUND);
         }
         int firstDelimiterStart = matcher.start();
         int firstDelimiterEnd = matcher.end();
 
         // 查找第二个分隔符
         if (!matcher.find()) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "只找到一个分隔符，需要两个分隔符");
+            return new String[]{TextConstant.DELIMITER_NOT_ENOUGH};
+//            throw new BusinessException(ErrorCode.SYSTEM_ERROR, TextConstant.DELIMITER_NOT_ENOUGH);
         }
         int secondDelimiterStart = matcher.start();
         int secondDelimiterEnd = matcher.end();

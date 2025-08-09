@@ -38,16 +38,6 @@ public class ChartQueryRequest extends PageRequest implements Serializable {
     private String chartType;
 
     /**
-     * 状态（wait-待处理 succeed-成功  failed-失败 running-执行中）
-     */
-    private Integer status;
-
-    /**
-     * 执行信息
-     */
-    private String execMessage;
-
-    /**
      * 用户 id
      */
     private Long userId;

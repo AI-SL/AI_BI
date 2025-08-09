@@ -5,10 +5,10 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.laow.springbootinit.annotation.AuthCheck;
-import com.laow.springbootinit.common.BaseResponse;
-import com.laow.springbootinit.common.DeleteRequest;
-import com.laow.springbootinit.common.ErrorCode;
-import com.laow.springbootinit.common.ResultUtils;
+import com.laow.springbootinit.bizmq.BiMessageProducer;
+import com.laow.springbootinit.common.*;
+import com.laow.springbootinit.constant.PromptConstant;
+import com.laow.springbootinit.constant.TextConstant;
 import com.laow.springbootinit.constant.UserConstant;
 import com.laow.springbootinit.exception.BusinessException;
 import com.laow.springbootinit.exception.ThrowUtils;
@@ -62,6 +62,9 @@ public class ChartController {
 
     @Resource
     private ThreadPoolExecutor threadPoolExecutor;
+
+    @Resource
+    private BiMessageProducer biMessageProducer;
 
     // region 增删改查
 
@@ -259,8 +262,8 @@ public class ChartController {
         String chartType = genChartByAiRequest.getChartType();
 
         // 校验
-        ThrowUtils.throwIf(StringUtils.isAnyBlank(goal), ErrorCode.PARAMS_ERROR, "目标为空");
-        ThrowUtils.throwIf(StringUtils.isAnyBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "名称过长");
+        ThrowUtils.throwIf(StringUtils.isAnyBlank(goal), ErrorCode.PARAMS_ERROR, TextConstant.FILE_GOAL_EMPTY);
+        ThrowUtils.throwIf(StringUtils.isAnyBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, TextConstant.FILE_NAME_TOO_LONG);
 
         // 校验文件
         //获取文件大小
@@ -269,11 +272,11 @@ public class ChartController {
         String originalFilename = multipartFile.getOriginalFilename();
         // 1M的大小
         final long ONE_M = 1 * 1024 * 1024L;
-        ThrowUtils.throwIf(size > ONE_M, ErrorCode.PARAMS_ERROR, "文件超过1MB");
+        ThrowUtils.throwIf(size > ONE_M, ErrorCode.PARAMS_ERROR, TextConstant.FILE_SIZE_EXCEEDED);
         // 校验文件后缀
         String fileSuffix = FileUtil.extName(originalFilename);
         final List<String> validFileSuffixList = Arrays.asList("xlsx", "xls");
-        ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "文件格式错误");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, TextConstant.FILE_FORMAT_ERROR);
 
         // 获取当前登录用户ID
         User loginUser = userService.getLoginUser(request);
@@ -281,115 +284,38 @@ public class ChartController {
         // 限流判断，每个用户一个限流器
         redisLimiterManager.doRateLimit("genChartByAi_" + loginUser.getId());
 
-        final String prompt = "你是一名专业的数据分析师和前端开发专家（精通ECharts V5）。接下来，请严格根据我按以下格式提供的任务执行分析：\n" +
-                "\n" +
-                "---\n" +
-                "分析需求：\n" +
-                "{请清晰、具体地描述你的数据分析目标或问题。例如：“分析过去一年每月销售额趋势”，“比较不同产品线在各地区的市场份额”，“识别客户购买行为中的关键模式”，“计算关键绩效指标KPI如平均订单价值、客户生命周期价值”等。}\n" +
-                "原始数据：\n" +
-                "{提供标准的CSV格式文本数据。要求：\n" +
-                "使用逗号`,`分隔字段。\n" +
-                "包含逗号或换行符的字段必须用双引号`\"`包裹。\n" +
-                "缺失值请用空字符串`\"\"`或`null`表示。\n" +
-                "第一行必须为列名（表头）。\n" +
-                "确保数据格式正确无误。}\n" +
-                "\n" +
-                "请基于提供的“分析需求”和“原始数据”：\n" +
-                "1. 进行必要的数据处理(如清洗、筛选、聚合、排序、计算新指标等)。\n" +
-                "2. 选择最合适的ECharts图表类型进行数据可视化或者根据用户的指定进行可视化。\n" +
-                "3. 生成分析结论。\n" +
-                "\n" +
-                "你的输出必须且仅包含以下两部分，绝对不要有任何其他内容（如注释、解释、问候语、Markdown代码块标记等，特别是【【【【【这样的两组分隔符输出时要按照我给的样式进行输出，不要发生改变）：**\n" +
-                "\n" +
-                "【【【【【\n" +
-                "{完整且可直接替换option后能运行的ECharts V6 `option`配置代码。要求：\n" +
-                "可以直接用到<ReactECharts option={option}/>中。" +
-                "代码必须是**纯粹**的Json对象,只需要option对应的数据，比如\\{\"option\":\\{对应参数\\}\\}类似这样的数据，我需要的是你给出里面option后面的对应的数据，包括外面的\\{对应参数\\}这样的格式。" +
-                "必须包含所有必要的数据处理逻辑(在`dataset`或`series.data`中体现)。\n" +
-                "图表默认渲染在`dom: 'chartContainer'`元素上(用户需在HTML中准备)，如果有图例，请统一放在图的右上角,不要给图表设置名称。\n" +
-                "确保可视化方案**合理、清晰、有效**地服务于分析需求。}" +
-                "返回的option配置示例(不要使用new echarts.graphic.LinearGradient这个渐变的函数)" +
-                "对option的配置进行校验，然后要确定没有错误，ECharts使用时可以显示图像" +
-                "如果在校验的时候发现存在错误或new echarts.graphic.LinearGradient函数，请重新生成，确保没有这个函数并且保持与下面的示例格式相同。\n" +
-                "{\n" +
-                "  xAxis: {\n" +
-                "    type: 'category',\n" +
-                "    data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']\n" +
-                "  },\n" +
-                "  yAxis: {\n" +
-                "    type: 'value'\n" +
-                "  },\n" +
-                "  series: [\n" +
-                "    {\n" +
-                "      data: [150, 230, 224, 218, 135, 147, 260],\n" +
-                "      type: 'line'\n" +
-                "    }\n" +
-                "  ]\n" +
-                "};\n" +
-                "【【【【【\n" +
-                "{**具体、清晰、有洞察力**的数据分析结论。要求：\n" +
-                "* **严格基于**处理后的数据和生成的可视化结果。\n" +
-                "* 详细阐述关键发现、主要趋势、显著模式、异常点或重要比较。\n" +
-                "* 结论应直接回应“分析需求”中提出的目标或问题。\n" +
-                "* 避免模糊、笼统的陈述。}" +
-                "* 回答的结论示例：{\n" +
-                "  \"关键发现\": [\n" +
-                "    \"学区等级显著影响房屋定价，呈现明显的梯度特征：一等学区平均单价783.33万元，较二等学区高出93.4%，较普通学区高出216.3%\",\n" +
-                "    \"二等学区与普通学区价差相对收窄，两者差价仅157.5万元，反映中等教育资源的市场估值弹性较低\",\n" +
-                "    \"所有样本均来自2024年1-4月挂牌数据，未体现季节性波动因素，建议结合历史同期数据验证长期趋势\"\n" +
-                "  ],\n" +
-                "  \"主要趋势\": [\n" +
-                "    \"教育资源质量与房价呈强正相关，优质学区溢价能力突出，一等学区房源均价接近普通学区的3倍\",\n" +
-                "    \"学区分级直接影响市场定价体系，形成清晰的三级价格梯队，与我国现行教育资源配置政策高度吻合\"\n" +
-                "  ],\n" +
-                "  \"异常点提示\": [\n" +
-                "    \"成都高新区（普通学区）出现320万元的较高挂牌价，需核查该区域是否存在特殊配套资源或政策利好\",\n" +
-                "    \"武汉江汉区（普通学区）210万元的低价与同级别重庆渝北区380万元存在显著差异，建议关注城市能级和地段因素的影响\"\n" +
-                "  ]\n" +
-                "}\n" +
-                "\n" +
-                "**重要原则：**\n" +
-                "* **纯净输出：** 除了上述两部分，**绝对不生成任何多余字符**。\n" +
-                "* **可行性检查：** 如果数据格式错误、需求无法理解或基于提供数据无法实现需求，**立即停止并清晰告知用户问题所在**，不生成代码和结论。\n" +
-                "* **实事求是：** 仅分析用户提供的数据，不虚构数据或进行超出数据支持范围的推测。";
-        // 构造用户输入
-        StringBuilder userInput = new StringBuilder();
-
-        String userGoal = goal;
-        if (StringUtils.isNotBlank(chartType))
-            userGoal += "，请使用" + chartType;
-        userInput.append(prompt).append("\n");
-        userInput.append("分析需求：").append(userGoal).append("\n");
-
-        // 读取到用户上传的excel文件，进行一个处理
+        // 读取文件
         String csvData = ExcelUtils.exceltoCsv(multipartFile);
-        userInput.append("原始数据：").append(csvData).append("\n");
+
         // 插入数据库
         Chart chart = new Chart();
         chart.setName(name);
         chart.setGoal(goal);
         chart.setChartData(csvData);
         chart.setChartType(chartType);
-        chart.setStatus("wait");
+        chart.setStatus(TaskStatus.WAIT.getStatus());
         chart.setUserId(loginUser.getId());
-        boolean saveResult = chartService.updateById(chart);
+        boolean saveResult = chartService.save(chart);
         if (!saveResult) {
-            handleChartUpdateError(chart.getId(), "保存图表原始数据失败");
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_SAVE_ORIGINAL_FAILED);
+            BiResponse biResponse = new BiResponse();
+            biResponse.setChartId(chart.getId());
+
+            return ResultUtils.success(biResponse);
         }
         Chart updateChart = new Chart();
         updateChart.setId(chart.getId());
-        updateChart.setStatus("running");
+        updateChart.setStatus(TaskStatus.RUNNING.getStatus());
         boolean runningResult = chartService.updateById(updateChart);
         if (!runningResult) {
-            handleChartUpdateError(chart.getId(), "更新图表执行中状态失败");
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_UPDATE_RUNNING_FAILED);
             BiResponse biResponse = new BiResponse();
             biResponse.setChartId(chart.getId());
 
             return ResultUtils.success(biResponse);
         }
         // 准备消息
-        List<SparkX1Manager.Message> messages = new ArrayList<>();
-        messages.add(new SparkX1Manager.Message("user", userInput.toString()));
+        List<SparkX1Manager.Message> messages = chartService.buildUserInput(chart);
 
         // 非流式调用SparkX1 AI
         JSONObject response = sparkX1Manager.chatCompletion(messages, loginUser.getId().toString());
@@ -397,7 +323,7 @@ public class ChartController {
         String[] results = DataParser.parseOptionDirect(response);
         // 这里对AI生成的内容不符合要求就不进行保存，防止脏数据，导致渲染图像错误
         if (results.length < 3) {
-            handleChartUpdateError(chart.getId(), "SparkX1 AI生成错误");
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR + ": " + request.toString());
             BiResponse biResponse = new BiResponse();
             biResponse.setChartId(chart.getId());
 
@@ -413,10 +339,10 @@ public class ChartController {
         updateChartResult.setId(chart.getId());
         updateChartResult.setGenChart(genChart);
         updateChartResult.setGenResult(genResult);
-        updateChartResult.setStatus("succeed");
+        updateChartResult.setStatus(TaskStatus.SUCCESS.getStatus());
         boolean succeedResult = chartService.updateById(updateChartResult);
         if (!succeedResult) {
-            handleChartUpdateError(chart.getId(), "更新图表已完成状态失败");
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_UPDATE_SUCCEED_FAILED);
         }
         BiResponse biResponse = new BiResponse();
         biResponse.setChartId(chart.getId());
@@ -432,7 +358,7 @@ public class ChartController {
      * @param request
      * @return
      */
-    @PostMapping("/gen")
+    @PostMapping("/gen/async")
     public BaseResponse<BiResponse> genChartByAiAsync(@RequestPart("file") MultipartFile multipartFile,
                                                  GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
         String name = genChartByAiRequest.getName();
@@ -440,8 +366,8 @@ public class ChartController {
         String chartType = genChartByAiRequest.getChartType();
 
         // 校验
-        ThrowUtils.throwIf(StringUtils.isAnyBlank(goal), ErrorCode.PARAMS_ERROR, "目标为空");
-        ThrowUtils.throwIf(StringUtils.isAnyBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "名称过长");
+        ThrowUtils.throwIf(StringUtils.isAnyBlank(goal), ErrorCode.PARAMS_ERROR, TextConstant.FILE_GOAL_EMPTY);
+        ThrowUtils.throwIf(StringUtils.isAnyBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, TextConstant.FILE_NAME_TOO_LONG);
 
         // 校验文件
         //获取文件大小
@@ -449,12 +375,12 @@ public class ChartController {
         //获取文件名
         String originalFilename = multipartFile.getOriginalFilename();
         // 1M的大小
-        final long ONE_M = 1 * 1024 * 1024L;
-        ThrowUtils.throwIf(size > ONE_M, ErrorCode.PARAMS_ERROR, "文件超过1MB");
+        final long ONE_M = 1024 * 1024L;
+        ThrowUtils.throwIf(size > ONE_M, ErrorCode.PARAMS_ERROR, TextConstant.FILE_SIZE_EXCEEDED);
         // 校验文件后缀
         String fileSuffix = FileUtil.extName(originalFilename);
         final List<String> validFileSuffixList = Arrays.asList("xlsx", "xls");
-        ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "文件格式错误");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, TextConstant.FILE_FORMAT_ERROR);
 
         // 获取当前登录用户ID
         User loginUser = userService.getLoginUser(request);
@@ -462,89 +388,10 @@ public class ChartController {
         // 限流判断，每个用户一个限流器
         redisLimiterManager.doRateLimit("genChartByAi_" + loginUser.getId());
 
-        final String prompt = "你是一名专业的数据分析师和前端开发专家（精通ECharts V5）。接下来，请严格根据我按以下格式提供的任务执行分析：\n" +
-                "\n" +
-                "---\n" +
-                "分析需求：\n" +
-                "{请清晰、具体地描述你的数据分析目标或问题。例如：“分析过去一年每月销售额趋势”，“比较不同产品线在各地区的市场份额”，“识别客户购买行为中的关键模式”，“计算关键绩效指标KPI如平均订单价值、客户生命周期价值”等。}\n" +
-                "原始数据：\n" +
-                "{提供标准的CSV格式文本数据。要求：\n" +
-                "使用逗号`,`分隔字段。\n" +
-                "包含逗号或换行符的字段必须用双引号`\"`包裹。\n" +
-                "缺失值请用空字符串`\"\"`或`null`表示。\n" +
-                "第一行必须为列名（表头）。\n" +
-                "确保数据格式正确无误。}\n" +
-                "\n" +
-                "请基于提供的“分析需求”和“原始数据”：\n" +
-                "1. 进行必要的数据处理(如清洗、筛选、聚合、排序、计算新指标等)。\n" +
-                "2. 选择最合适的ECharts图表类型进行数据可视化或者根据用户的指定进行可视化。\n" +
-                "3. 生成分析结论。\n" +
-                "\n" +
-                "你的输出必须且仅包含以下两部分，绝对不要有任何其他内容（如注释、解释、问候语、Markdown代码块标记等，特别是【【【【【这样的两组分隔符输出时要按照我给的样式进行输出，不要发生改变）：**\n" +
-                "\n" +
-                "【【【【【\n" +
-                "{完整且可直接替换option后能运行的ECharts V6 `option`配置代码。要求：\n" +
-                "可以直接用到<ReactECharts option={option}/>中。" +
-                "代码必须是**纯粹**的Json对象,只需要option对应的数据，比如\\{\"option\":\\{对应参数\\}\\}类似这样的数据，我需要的是你给出里面option后面的对应的数据，包括外面的\\{对应参数\\}这样的格式。" +
-                "必须包含所有必要的数据处理逻辑(在`dataset`或`series.data`中体现)。\n" +
-                "图表默认渲染在`dom: 'chartContainer'`元素上(用户需在HTML中准备)，如果有图例，请统一放在图的右上角,不要给图表设置名称。\n" +
-                "确保可视化方案**合理、清晰、有效**地服务于分析需求。}" +
-                "返回的option配置示例(不要使用new echarts.graphic.LinearGradient这个渐变的函数)" +
-                "对option的配置进行校验，然后要确定没有错误，ECharts使用时可以显示图像" +
-                "如果在校验的时候发现存在错误或new echarts.graphic.LinearGradient函数，请重新生成，确保没有这个函数并且保持与下面的示例格式相同。\n" +
-                "{\n" +
-                "  xAxis: {\n" +
-                "    type: 'category',\n" +
-                "    data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']\n" +
-                "  },\n" +
-                "  yAxis: {\n" +
-                "    type: 'value'\n" +
-                "  },\n" +
-                "  series: [\n" +
-                "    {\n" +
-                "      data: [150, 230, 224, 218, 135, 147, 260],\n" +
-                "      type: 'line'\n" +
-                "    }\n" +
-                "  ]\n" +
-                "};\n" +
-                "【【【【【\n" +
-                "{**具体、清晰、有洞察力**的数据分析结论。要求：\n" +
-                "* **严格基于**处理后的数据和生成的可视化结果。\n" +
-                "* 详细阐述关键发现、主要趋势、显著模式、异常点或重要比较。\n" +
-                "* 结论应直接回应“分析需求”中提出的目标或问题。\n" +
-                "* 避免模糊、笼统的陈述。}" +
-                "* 回答的结论示例：{\n" +
-                "  \"关键发现\": [\n" +
-                "    \"学区等级显著影响房屋定价，呈现明显的梯度特征：一等学区平均单价783.33万元，较二等学区高出93.4%，较普通学区高出216.3%\",\n" +
-                "    \"二等学区与普通学区价差相对收窄，两者差价仅157.5万元，反映中等教育资源的市场估值弹性较低\",\n" +
-                "    \"所有样本均来自2024年1-4月挂牌数据，未体现季节性波动因素，建议结合历史同期数据验证长期趋势\"\n" +
-                "  ],\n" +
-                "  \"主要趋势\": [\n" +
-                "    \"教育资源质量与房价呈强正相关，优质学区溢价能力突出，一等学区房源均价接近普通学区的3倍\",\n" +
-                "    \"学区分级直接影响市场定价体系，形成清晰的三级价格梯队，与我国现行教育资源配置政策高度吻合\"\n" +
-                "  ],\n" +
-                "  \"异常点提示\": [\n" +
-                "    \"成都高新区（普通学区）出现320万元的较高挂牌价，需核查该区域是否存在特殊配套资源或政策利好\",\n" +
-                "    \"武汉江汉区（普通学区）210万元的低价与同级别重庆渝北区380万元存在显著差异，建议关注城市能级和地段因素的影响\"\n" +
-                "  ]\n" +
-                "}\n" +
-                "\n" +
-                "**重要原则：**\n" +
-                "* **纯净输出：** 除了上述两部分，**绝对不生成任何多余字符**。\n" +
-                "* **可行性检查：** 如果数据格式错误、需求无法理解或基于提供数据无法实现需求，**立即停止并清晰告知用户问题所在**，不生成代码和结论。\n" +
-                "* **实事求是：** 仅分析用户提供的数据，不虚构数据或进行超出数据支持范围的推测。";
-        // 构造用户输入
-        StringBuilder userInput = new StringBuilder();
-
-        String userGoal = goal;
-        if (StringUtils.isNotBlank(chartType))
-            userGoal += "，请使用" + chartType;
-        userInput.append(prompt).append("\n");
-        userInput.append("分析需求：").append(userGoal).append("\n");
 
         // 读取到用户上传的excel文件，进行一个处理
         String csvData = ExcelUtils.exceltoCsv(multipartFile);
-        userInput.append("原始数据：").append(csvData).append("\n");
+
 
         // 插入数据库
         Chart chart = new Chart();
@@ -552,12 +399,12 @@ public class ChartController {
         chart.setGoal(goal);
         chart.setChartData(csvData);
         chart.setChartType(chartType);
-        chart.setStatus("wait");
+        chart.setStatus(TaskStatus.WAIT.getStatus());
         chart.setUserId(loginUser.getId());
 
         boolean saveResult = chartService.save(chart);
         if (!saveResult) {
-            handleChartUpdateError(chart.getId(), "保存图表原始数据失败");
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_SAVE_ORIGINAL_FAILED);
         }
 
         // todo 要处理任务队列满了后抛异常的情况
@@ -565,15 +412,14 @@ public class ChartController {
 
             Chart updateChart = new Chart();
             updateChart.setId(chart.getId());
-            updateChart.setStatus("running");
+            updateChart.setStatus(TaskStatus.RUNNING.getStatus());
             boolean runningResult = chartService.updateById(updateChart);
             if (!runningResult) {
-                handleChartUpdateError(chart.getId(), "更新图表执行中状态失败");
+                chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_UPDATE_RUNNING_FAILED);
                 return;
             }
             // 准备消息
-            List<SparkX1Manager.Message> messages = new ArrayList<>();
-            messages.add(new SparkX1Manager.Message("user", userInput.toString()));
+            List<SparkX1Manager.Message> messages = chartService.buildUserInput(chart);
 
             // 非流式调用SparkX1 AI
             JSONObject response = sparkX1Manager.chatCompletion(messages, loginUser.getId().toString());
@@ -581,7 +427,7 @@ public class ChartController {
             String[] results = DataParser.parseOptionDirect(response);
             // 这里对AI生成的内容不符合要求就不进行保存，防止脏数据，导致渲染图像错误
             if (results.length < 3) {
-                handleChartUpdateError(chart.getId(), "SparkX1 AI生成错误");
+                chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR);
                 return;
             }
             // 解析图表配置
@@ -593,10 +439,10 @@ public class ChartController {
             updateChartResult.setId(chart.getId());
             updateChartResult.setGenChart(genChart);
             updateChartResult.setGenResult(genResult);
-            updateChartResult.setStatus("succeed");
+            updateChartResult.setStatus(TaskStatus.SUCCESS.getStatus());
             boolean succeedResult = chartService.updateById(updateChartResult);
             if (!succeedResult) {
-                handleChartUpdateError(chart.getId(), "更新图表已完成状态失败");
+                chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_UPDATE_SUCCEED_FAILED);
             }
         }, threadPoolExecutor);
 
@@ -606,15 +452,70 @@ public class ChartController {
         return ResultUtils.success(biResponse);
     }
 
-    private void handleChartUpdateError(Long chartId, String execMessage) {
-        Chart updateChartResult = new Chart();
-        updateChartResult.setId(chartId);
-        updateChartResult.setStatus("failed");
-        updateChartResult.setExecMessage(execMessage);
-        boolean result = chartService.updateById(updateChartResult);
-        if (!result) {
-            log.error("更新图表状态失败" + chartId + ", " + execMessage);
+    /**
+     * 智能生成图表(分布式)
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen/async/mq")
+    public BaseResponse<BiResponse> genChartByAiAsyncMq(@RequestPart("file") MultipartFile multipartFile,
+                                                      GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String name = genChartByAiRequest.getName();
+        String goal = genChartByAiRequest.getGoal();
+        String chartType = genChartByAiRequest.getChartType();
+
+        // 校验
+        ThrowUtils.throwIf(StringUtils.isAnyBlank(goal), ErrorCode.PARAMS_ERROR, TextConstant.MESSAGE_EMPTY);
+        ThrowUtils.throwIf(StringUtils.isAnyBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, TextConstant.FILE_NAME_TOO_LONG);
+
+        // 校验文件
+        //获取文件大小
+        long size = multipartFile.getSize();
+        //获取文件名
+        String originalFilename = multipartFile.getOriginalFilename();
+        // 1M的大小
+        final long ONE_M = 1024 * 1024L;
+        ThrowUtils.throwIf(size > ONE_M, ErrorCode.PARAMS_ERROR, TextConstant.FILE_SIZE_EXCEEDED);
+        // 校验文件后缀
+        String fileSuffix = FileUtil.extName(originalFilename);
+        final List<String> validFileSuffixList = Arrays.asList("xlsx", "xls");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, TextConstant.FILE_FORMAT_ERROR);
+
+        // 获取当前登录用户ID
+        User loginUser = userService.getLoginUser(request);
+
+        // 限流判断，每个用户一个限流器
+        redisLimiterManager.doRateLimit("genChartByAi_" + loginUser.getId());
+
+
+        // 读取到用户上传的excel文件，进行一个处理
+        String csvData = ExcelUtils.exceltoCsv(multipartFile);
+
+        // 插入数据库
+        Chart chart = new Chart();
+        chart.setName(name);
+        chart.setGoal(goal);
+        chart.setChartData(csvData);
+        chart.setChartType(chartType);
+        chart.setStatus(TaskStatus.WAIT.getStatus());
+        chart.setUserId(loginUser.getId());
+
+        boolean saveResult = chartService.save(chart);
+        if (!saveResult) {
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.CHART_SAVE_ORIGINAL_FAILED);
         }
+
+
+        Long newChartId = chart.getId();
+        biMessageProducer.sendMessage(String.valueOf(newChartId));
+
+        BiResponse biResponse = new BiResponse();
+        biResponse.setChartId(chart.getId());
+
+        return ResultUtils.success(biResponse);
     }
 
 }
