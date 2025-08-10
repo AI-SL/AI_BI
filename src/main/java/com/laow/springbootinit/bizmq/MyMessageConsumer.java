@@ -21,6 +21,7 @@ public class MyMessageConsumer {
 
     /**
      * 指定程序监听的消息队列和确认机制
+     *
      * @param message
      * @param channel
      * @param deliveryTag
