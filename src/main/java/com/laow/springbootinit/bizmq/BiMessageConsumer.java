@@ -89,7 +89,7 @@ public class BiMessageConsumer {
             // 这里对AI生成的内容不符合要求就不进行保存，防止脏数据，导致渲染图像错误
             if (results.length < 3) {
                 channel.basicNack(deliveryTag, false, false);
-                chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR);
+                chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR + ": " + results[0]);
                 return;
             }
             // 解析图表配置
@@ -103,7 +103,6 @@ public class BiMessageConsumer {
             updateChartResult.setGenResult(genResult);
             updateChartResult.setStatus(TaskStatus.SUCCESS.getStatus());
             // 处理成功后，如果之前又出现错误的情况，会在exeMessage字段存储错误信息，后面处理成功后这里就需要处理
-            updateChartResult.setExecMessage("图表生成成功");
             boolean succeedResult = chartService.updateById(updateChartResult);
             if (!succeedResult) {
                 channel.basicNack(deliveryTag, false, false);

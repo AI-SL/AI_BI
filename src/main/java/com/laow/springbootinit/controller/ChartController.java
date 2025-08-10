@@ -321,7 +321,7 @@ public class ChartController {
         String[] results = DataParser.parseOptionDirect(response);
         // 这里对AI生成的内容不符合要求就不进行保存，防止脏数据，导致渲染图像错误
         if (results.length < 3) {
-            chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR + ": " + request.toString());
+            chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR + ": " + results[0]);
             BiResponse biResponse = new BiResponse();
             biResponse.setChartId(chart.getId());
 
@@ -425,7 +425,7 @@ public class ChartController {
             String[] results = DataParser.parseOptionDirect(response);
             // 这里对AI生成的内容不符合要求就不进行保存，防止脏数据，导致渲染图像错误
             if (results.length < 3) {
-                chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR);
+                chartService.handleChartUpdateError(chart.getId(), TextConstant.AI_GENERATION_ERROR+ ": " + results[0]);
                 return;
             }
             // 解析图表配置
