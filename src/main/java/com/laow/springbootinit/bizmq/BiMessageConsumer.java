@@ -25,6 +25,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 消费者
+ */
 @Component
 @Slf4j
 public class BiMessageConsumer {
